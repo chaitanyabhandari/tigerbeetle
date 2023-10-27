@@ -7,19 +7,19 @@
 //! Each zone can tolerate a different pattern of faults.
 //!
 //! - superblock:
-//!   - One read/write fault is permitted per area (section, free set, …).
+//!   - One read/write fault is permitted per area (section, manifest, …).
 //!   - An additional fault is permitted at the target of a pending write during a crash.
 //!
 //! - wal_headers, wal_prepares:
-//!   - Read/write faults are distributed between replicas according to ClusterFaultAtlas, to ensure
+//!   - Read/write faults are distributed between replicas according to StorageFaultAtlas, to ensure
 //!     that at least one replica will have a valid copy to help others repair.
 //!     (See: generate_faulty_wal_areas()).
-//!   - When a replica crashes, it may fault the WAL outside of ClusterFaultAtlas.
+//!   - When a replica crashes, it may fault the WAL outside of StorageFaultAtlas.
 //!   - When replica_count=1, its WAL can only be corrupted by a crash, never a read/write.
 //!     (When replica_count=1, there are no other replicas to assist with repair).
 //!
 //! - grid:
-//!   - Similarly to prepares and headers, ClusterFaultAtlas ensures that at least one replica will
+//!   - Similarly to prepares and headers, StorageFaultAtlas ensures that at least one replica will
 //!     have a block.
 //!   - When replica_count≤2, grid faults are disabled.
 //!
@@ -36,7 +36,6 @@ const superblock = @import("../vsr/superblock.zig");
 const FreeSet = @import("../vsr/free_set.zig").FreeSet;
 const schema = @import("../lsm/schema.zig");
 const stdx = @import("../stdx.zig");
-const maybe = stdx.maybe;
 const PriorityQueue = std.PriorityQueue;
 const fuzz = @import("./fuzz.zig");
 const hash_log = @import("./hash_log.zig");
@@ -55,6 +54,26 @@ const log = std.log.scoped(.storage);
 // - likely that surrounding sectors also corrupt
 // - likely that stuff written at the same time is also corrupt even if written to a far away sector
 pub const Storage = struct {
+    const ReadFault = struct {
+        /// Chance out of 100 that a read will corrupt a sector, if the target memory is within
+        /// a faulty area of this replica.
+        probability: u8 = 0,
+    };
+    const WriteFault = struct {
+        /// Chance out of 100 that a write will corrupt a sector, if the target memory is within
+        /// a faulty area of this replica.
+        probability: u8 = 0,
+    };
+    const CrashFault = struct {
+        /// Chance out of 100 that a crash will corrupt a sector of a pending write's target,
+        /// if the target memory is within a faulty area of this replica.
+        probability: u8 = 0,
+    };
+    pub const Faults = struct {
+        read: ?ReadFault = null,
+        write: ?WriteFault = null,
+        crash: ?CrashFault = null
+    };
     /// Options for fault injection during fuzz testing
     pub const Options = struct {
         /// Seed for the storage PRNG.
@@ -72,19 +91,10 @@ pub const Storage = struct {
         /// Average number of ticks it may take to write data. Must be >= write_latency_min.
         write_latency_mean: u64,
 
-        /// Chance out of 100 that a read will corrupt a sector, if the target memory is within
-        /// a faulty area of this replica.
-        read_fault_probability: u8 = 0,
-        /// Chance out of 100 that a write will corrupt a sector, if the target memory is within
-        /// a faulty area of this replica.
-        write_fault_probability: u8 = 0,
-        /// Chance out of 100 that a crash will corrupt a sector of a pending write's target,
-        /// if the target memory is within a faulty area of this replica.
-        crash_fault_probability: u8 = 0,
-
+        faults: Faults = undefined,
         /// Enable/disable automatic read/write faults.
         /// Does not impact crash faults or manual faults.
-        fault_atlas: ?*const ClusterFaultAtlas = null,
+        fault_atlas: ?*const StorageFaultAtlas = null,
 
         /// Accessed by the Grid for extra verification of grid coherence.
         grid_checker: ?*GridChecker = null,
@@ -229,7 +239,7 @@ pub const Storage = struct {
         });
         while (storage.writes.peek()) |_| {
             const write = storage.writes.remove();
-            if (!storage.x_in_100(storage.options.crash_fault_probability)) continue;
+            if (storage.options.faults.crash == null or !storage.x_in_100(storage.options.faults.crash.?.probability)) continue;
 
             // Randomly corrupt one of the faulty sectors the operation targeted.
             // TODO: inject more realistic and varied storage faults as described above.
@@ -333,9 +343,9 @@ pub const Storage = struct {
         zone: vsr.Zone,
         offset_in_zone: u64,
     ) void {
-        zone.verify_iop(buffer, offset_in_zone);
-        assert(zone != .grid_padding);
         hash_log.emit_autohash(.{ buffer, zone, offset_in_zone }, .DeepRecursive);
+
+        verify_alignment(buffer);
 
         switch (zone) {
             .superblock,
@@ -377,7 +387,7 @@ pub const Storage = struct {
             storage.memory[offset_in_storage..][0..read.buffer.len],
         );
 
-        if (storage.x_in_100(storage.options.read_fault_probability)) {
+        if (storage.options.faults.read != null and storage.x_in_100(storage.options.faults.read.?.probability)) {
             storage.fault_faulty_sectors(read.zone, read.offset, read.buffer.len);
         }
 
@@ -405,9 +415,9 @@ pub const Storage = struct {
         zone: vsr.Zone,
         offset_in_zone: u64,
     ) void {
-        zone.verify_iop(buffer, offset_in_zone);
-        maybe(zone == .grid_padding); // Padding is zeroed during format.
         hash_log.emit_autohash(.{ buffer, zone, offset_in_zone }, .DeepRecursive);
+
+        verify_alignment(buffer);
 
         // Verify that there are no concurrent overlapping writes.
         var iterator = storage.writes.iterator();
@@ -447,7 +457,7 @@ pub const Storage = struct {
             storage.memory_written.set(sector);
         }
 
-        if (storage.x_in_100(storage.options.write_fault_probability)) {
+        if (storage.options.faults.write != null and storage.x_in_100(storage.options.faults.write.?.probability)) {
             storage.fault_faulty_sectors(write.zone, write.offset, write.buffer.len);
         }
 
@@ -594,6 +604,7 @@ pub const Storage = struct {
         ));
     }
 
+<<<<<<< HEAD
     pub fn client_replies(storage: *const Storage) []const MessageRawType(.reply) {
         const offset = vsr.Zone.client_replies.offset(0);
         const size = vsr.Zone.client_replies.size().?;
@@ -603,6 +614,8 @@ pub const Storage = struct {
         ));
     }
 
+=======
+>>>>>>> 72005838 (Swarm Testing: Make individual sub faults in Storage, Network & Replica faults optional.)
     pub fn grid_block(
         storage: *const Storage,
         address: u64,
@@ -666,7 +679,7 @@ pub const Storage = struct {
 
     /// Verify that the storage:
     /// - contains the given index block
-    /// - contains every data block referenced by the index block
+    /// - contains every filter/data block referenced by the index block
     pub fn verify_table(storage: *const Storage, index_address: u64, index_checksum: u128) void {
         assert(index_address > 0);
 
@@ -690,6 +703,15 @@ pub const Storage = struct {
         }
     }
 };
+
+fn verify_alignment(buffer: []const u8) void {
+    assert(buffer.len > 0);
+
+    // Ensure that the read or write is aligned correctly for Direct I/O:
+    // If this is not the case, the underlying syscall will return EINVAL.
+    assert(@mod(@intFromPtr(buffer.ptr), constants.sector_size) == 0);
+    assert(@mod(buffer.len, constants.sector_size) == 0);
+}
 
 pub const Area = union(enum) {
     superblock: struct { copy: u8 },
@@ -775,7 +797,7 @@ const SectorRange = struct {
 /// the replicas as that would make recovery impossible. Instead, we only
 /// allow faults in certain areas which differ between replicas.
 // TODO Support total superblock corruption, forcing a full state transfer.
-pub const ClusterFaultAtlas = struct {
+pub const StorageFaultAtlas = struct {
     pub const Options = struct {
         faulty_superblock: bool,
         faulty_wal_headers: bool,
@@ -784,6 +806,28 @@ pub const ClusterFaultAtlas = struct {
         faulty_grid: bool,
     };
 
+<<<<<<< HEAD
+=======
+    /// This is the maximum number of faults per-trailer-area that can be safely injected on a read
+    /// or write to the superblock zone.
+    ///
+    /// It does not include the additional "torn write" fault injected upon a crash.
+    ///
+    /// For SuperBlockHeader, checkpoint() and view_change() require 3/4 valid headers (1
+    /// fault). Trailers are likewise 3/4 + 1 fault — consider if two faults were injected:
+    /// 1. `SuperBlock.checkpoint()` for sequence=6.
+    ///   - write copy 0, corrupt manifest (fault_count=1)
+    ///   - write copy 1, corrupt manifest (fault_count=2) !
+    /// 2. Crash. Recover.
+    /// 3. `SuperBlock.open()`. The highest valid quorum is sequence=6, but there is no
+    ///    valid manifest.
+    const superblock_trailer_faults_max = @divExact(constants.superblock_copies, 2) - 1;
+
+    comptime {
+        assert(superblock_trailer_faults_max >= 1);
+    }
+
+>>>>>>> dea3d0c4 (Swarm Testing: Make individual sub faults in Storage, Network & Replica faults optional.)
     const CopySet = std.StaticBitSet(constants.superblock_copies);
     const ReplicaSet = std.StaticBitSet(constants.replicas_max);
     const headers_per_sector = @divExact(constants.sector_size, @sizeOf(vsr.Header));
@@ -805,7 +849,7 @@ pub const ClusterFaultAtlas = struct {
     faulty_grid_blocks: [constants.members_max]FaultyGridBlocks =
         [_]FaultyGridBlocks{FaultyGridBlocks.initEmpty()} ** constants.members_max,
 
-    pub fn init(replica_count: u8, random: std.rand.Random, options: Options) ClusterFaultAtlas {
+    pub fn init(replica_count: u8, random: std.rand.Random, options: Options) StorageFaultAtlas {
         if (replica_count == 1) {
             // If there is only one replica in the cluster, WAL/Grid faults are not recoverable.
             assert(!options.faulty_wal_headers);
@@ -814,7 +858,7 @@ pub const ClusterFaultAtlas = struct {
             assert(!options.faulty_grid);
         }
 
-        var atlas = ClusterFaultAtlas{ .options = options };
+        var atlas = StorageFaultAtlas{ .options = options };
 
         const quorums = vsr.quorums(replica_count);
         const faults_max = quorums.replication - 1;
@@ -857,7 +901,7 @@ pub const ClusterFaultAtlas = struct {
 
     /// Returns a range of faulty sectors which intersect the specified range.
     fn faulty_superblock(
-        atlas: *const ClusterFaultAtlas,
+        atlas: *const StorageFaultAtlas,
         replica_index: usize,
         offset_in_zone: u64,
         size: u64,
@@ -879,7 +923,7 @@ pub const ClusterFaultAtlas = struct {
 
     /// Returns a range of faulty sectors which intersect the specified range.
     fn faulty_wal_headers(
-        atlas: *const ClusterFaultAtlas,
+        atlas: *const StorageFaultAtlas,
         replica_index: usize,
         offset_in_zone: u64,
         size: u64,
@@ -897,7 +941,7 @@ pub const ClusterFaultAtlas = struct {
 
     /// Returns a range of faulty sectors which intersect the specified range.
     fn faulty_wal_prepares(
-        atlas: *const ClusterFaultAtlas,
+        atlas: *const StorageFaultAtlas,
         replica_index: usize,
         offset_in_zone: u64,
         size: u64,
@@ -914,7 +958,7 @@ pub const ClusterFaultAtlas = struct {
     }
 
     fn faulty_client_replies(
-        atlas: *const ClusterFaultAtlas,
+        atlas: *const StorageFaultAtlas,
         replica_index: usize,
         offset_in_zone: u64,
         size: u64,
@@ -931,7 +975,7 @@ pub const ClusterFaultAtlas = struct {
     }
 
     fn faulty_grid(
-        atlas: *const ClusterFaultAtlas,
+        atlas: *const StorageFaultAtlas,
         replica_index: usize,
         offset_in_zone: u64,
         size: u64,

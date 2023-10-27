@@ -10,7 +10,7 @@ const Message = MessagePool.Message;
 
 const AOF = @import("aof.zig").AOF;
 const Storage = @import("storage.zig").Storage;
-const StorageFaultAtlas = @import("storage.zig").ClusterFaultAtlas;
+const StorageFaultAtlas = @import("storage.zig").StorageFaultAtlas;
 const Time = @import("time.zig").Time;
 const IdPermutation = @import("id.zig").IdPermutation;
 

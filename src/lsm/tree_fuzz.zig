@@ -17,7 +17,7 @@ const Direction = @import("../direction.zig").Direction;
 const Transfer = @import("../tigerbeetle.zig").Transfer;
 const Account = @import("../tigerbeetle.zig").Account;
 const Storage = @import("../testing/storage.zig").Storage;
-const ClusterFaultAtlas = @import("../testing/storage.zig").ClusterFaultAtlas;
+const StorageFaultAtlas = @import("../testing/storage.zig").StorageFaultAtlas;
 const StateMachine = @import("../state_machine.zig").StateMachineType(Storage, constants.state_machine_config);
 const GridType = @import("../vsr/grid.zig").GridType;
 const allocate_block = @import("../vsr/grid.zig").allocate_block;
@@ -682,7 +682,7 @@ pub fn main(fuzz_args: fuzz.FuzzArgs) !void {
     const table_usage = random.enumValue(TableUsage);
     log.info("table_usage={}", .{table_usage});
 
-    const storage_fault_atlas = ClusterFaultAtlas.init(3, random, .{
+    const storage_fault_atlas = StorageFaultAtlas.init(3, random, .{
         .faulty_superblock = false,
         .faulty_wal_headers = false,
         .faulty_wal_prepares = false,

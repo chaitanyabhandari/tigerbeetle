@@ -1148,10 +1148,14 @@ const TestContext = struct {
                 .seed = random.int(u64),
                 .one_way_delay_mean = 3 + random.uintLessThan(u16, 10),
                 .one_way_delay_min = random.uintLessThan(u16, 3),
-
                 .path_maximum_capacity = 128,
-                .path_clog_duration_mean = 0,
-                .path_clog_probability = 0,
+                .faults = .{
+                    .path_clog = .{
+                        .duration_mean = 0,
+                        .probability = 0,
+                    },
+                },
+
                 .recorded_count_max = 16,
             },
             .storage = .{

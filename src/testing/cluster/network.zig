@@ -20,6 +20,7 @@ const PacketSimulatorPath = @import("../packet_simulator.zig").Path;
 const log = std.log.scoped(.network);
 
 pub const NetworkOptions = PacketSimulatorOptions;
+pub const NetworkFaults = PacketSimulatorOptions.Faults;
 pub const LinkFilter = @import("../packet_simulator.zig").LinkFilter;
 
 pub const Network = struct {
@@ -137,10 +138,9 @@ pub const Network = struct {
     pub fn transition_to_liveness_mode(network: *Network, core: Core) void {
         assert(core.count() > 0);
 
-        network.packet_simulator.options.packet_loss_probability = 0;
-        network.packet_simulator.options.packet_replay_probability = 0;
-        network.packet_simulator.options.partition_probability = 0;
-        network.packet_simulator.options.unpartition_probability = 0;
+        network.packet_simulator.options.faults.packet_loss = null;
+        network.packet_simulator.options.faults.packet_replay = null;
+        network.packet_simulator.options.faults.partition = null;
 
         var it_source = core.iterator(.{});
         while (it_source.next()) |replica_source| {

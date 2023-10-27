@@ -804,17 +804,26 @@ test "clock: fuzz test" {
 
             .one_way_delay_mean = 25,
             .one_way_delay_min = 10,
-            .packet_loss_probability = 10,
             .path_maximum_capacity = 20,
-            .path_clog_duration_mean = 200,
-            .path_clog_probability = 2,
-            .packet_replay_probability = 2,
-
-            .partition_mode = .isolate_single,
-            .partition_probability = 25,
-            .unpartition_probability = 5,
-            .partition_stability = 100,
-            .unpartition_stability = 10,
+            .faults = .{
+                .packet_loss = .{
+                    .probability = 10,
+                },
+                .path_clog = .{
+                    .probability = 2,
+                    .duration_mean = 200,
+                },
+                .partition = .{
+                    .partition_mode = .isolate_single,
+                    .partition_probability = 25,
+                    .unpartition_probability = 5,
+                    .partition_stability = 100,
+                    .unpartition_stability = 10,
+                },
+                .packet_replay = .{
+                    .probability = 2,
+                }
+            },
         },
         .clock_count = clock_count,
         .ping_timeout = 20,

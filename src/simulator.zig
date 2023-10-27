@@ -25,6 +25,11 @@ const Failure = @import("testing/cluster.zig").Failure;
 const PartitionMode = @import("testing/packet_simulator.zig").PartitionMode;
 const PartitionSymmetry = @import("testing/packet_simulator.zig").PartitionSymmetry;
 const Core = @import("testing/cluster/network.zig").Network.Core;
+const NetworkOptions = @import("testing/cluster/network.zig").NetworkOptions;
+const NetworkFaults = @import("testing/cluster/network.zig").NetworkFaults;
+const StorageOptions = @import("testing/storage.zig").Storage.Options;
+const StorageFaults = @import("testing/storage.zig").Storage.Faults;
+
 const ReplySequence = @import("testing/reply_sequence.zig").ReplySequence;
 const IdPermutation = @import("testing/id.zig").IdPermutation;
 const Message = @import("message_pool.zig").MessagePool.Message;
@@ -101,36 +106,8 @@ pub fn main() !void {
             constants.storage_size_limit_max - random.uintLessThan(u64, constants.storage_size_limit_max / 10),
         ),
         .seed = random.int(u64),
-        .network = .{
-            .node_count = node_count,
-            .client_count = client_count,
-
-            .seed = random.int(u64),
-            .one_way_delay_mean = 3 + random.uintLessThan(u16, 10),
-            .one_way_delay_min = random.uintLessThan(u16, 3),
-            .packet_loss_probability = random.uintLessThan(u8, 30),
-            .path_maximum_capacity = 2 + random.uintLessThan(u8, 19),
-            .path_clog_duration_mean = random.uintLessThan(u16, 500),
-            .path_clog_probability = random.uintLessThan(u8, 2),
-            .packet_replay_probability = random.uintLessThan(u8, 50),
-
-            .partition_mode = random_partition_mode(random),
-            .partition_symmetry = random_partition_symmetry(random),
-            .partition_probability = random.uintLessThan(u8, 3),
-            .unpartition_probability = 1 + random.uintLessThan(u8, 10),
-            .partition_stability = 100 + random.uintLessThan(u32, 100),
-            .unpartition_stability = random.uintLessThan(u32, 20),
-        },
-        .storage = .{
-            .seed = random.int(u64),
-            .read_latency_min = random.uintLessThan(u16, 3),
-            .read_latency_mean = 3 + random.uintLessThan(u16, 10),
-            .write_latency_min = random.uintLessThan(u16, 3),
-            .write_latency_mean = 3 + random.uintLessThan(u16, 100),
-            .read_fault_probability = random.uintLessThan(u8, 10),
-            .write_fault_probability = random.uintLessThan(u8, 10),
-            .crash_fault_probability = 80 + random.uintLessThan(u8, 21),
-        },
+        .network = get_network_options(random, node_count, client_count),
+        .storage = get_storage_options(random),
         .storage_fault_atlas = .{
             .faulty_superblock = true,
             .faulty_wal_headers = replica_count > 1,
@@ -158,19 +135,7 @@ pub fn main() !void {
         .in_flight_max = ReplySequence.stalled_queue_capacity,
     });
 
-    const simulator_options = Simulator.Options{
-        .cluster = cluster_options,
-        .workload = workload_options,
-        // TODO Swarm testing: Test long+few crashes and short+many crashes separately.
-        .replica_crash_probability = 0.00002,
-        .replica_crash_stability = random.uintLessThan(u32, 1_000),
-        .replica_restart_probability = 0.0002,
-        .replica_restart_stability = random.uintLessThan(u32, 1_000),
-        .requests_max = constants.journal_slot_count * 3,
-        .request_probability = 1 + random.uintLessThan(u8, 99),
-        .request_idle_on_probability = random.uintLessThan(u8, 20),
-        .request_idle_off_probability = 10 + random.uintLessThan(u8, 10),
-    };
+    const simulator_options = get_simulator_options(random, cluster_options, workload_options);
 
     output.info(
         \\
@@ -182,29 +147,16 @@ pub fn main() !void {
         \\          request_probability={}%
         \\          idle_on_probability={}%
         \\          idle_off_probability={}%
+        \\          network faults={}
         \\          one_way_delay_mean={} ticks
         \\          one_way_delay_min={} ticks
-        \\          packet_loss_probability={}%
         \\          path_maximum_capacity={} messages
-        \\          path_clog_duration_mean={} ticks
-        \\          path_clog_probability={}%
-        \\          packet_replay_probability={}%
-        \\          partition_mode={}
-        \\          partition_symmetry={}
-        \\          partition_probability={}%
-        \\          unpartition_probability={}%
-        \\          partition_stability={} ticks
-        \\          unpartition_stability={} ticks
+        \\          storage faults={}
         \\          read_latency_min={}
         \\          read_latency_mean={}
         \\          write_latency_min={}
         \\          write_latency_mean={}
-        \\          read_fault_probability={}%
-        \\          write_fault_probability={}%
-        \\          crash_probability={d}%
-        \\          crash_stability={} ticks
-        \\          restart_probability={d}%
-        \\          restart_stability={} ticks
+        \\          replica faults={}
     , .{
         seed,
         cluster_options.replica_count,
@@ -213,29 +165,20 @@ pub fn main() !void {
         simulator_options.request_probability,
         simulator_options.request_idle_on_probability,
         simulator_options.request_idle_off_probability,
+
+        cluster_options.network.faults,
         cluster_options.network.one_way_delay_mean,
         cluster_options.network.one_way_delay_min,
-        cluster_options.network.packet_loss_probability,
         cluster_options.network.path_maximum_capacity,
-        cluster_options.network.path_clog_duration_mean,
-        cluster_options.network.path_clog_probability,
-        cluster_options.network.packet_replay_probability,
-        cluster_options.network.partition_mode,
-        cluster_options.network.partition_symmetry,
-        cluster_options.network.partition_probability,
-        cluster_options.network.unpartition_probability,
-        cluster_options.network.partition_stability,
-        cluster_options.network.unpartition_stability,
+
+
+        cluster_options.storage.faults,
         cluster_options.storage.read_latency_min,
         cluster_options.storage.read_latency_mean,
         cluster_options.storage.write_latency_min,
         cluster_options.storage.write_latency_mean,
-        cluster_options.storage.read_fault_probability,
-        cluster_options.storage.write_fault_probability,
-        simulator_options.replica_crash_probability,
-        simulator_options.replica_crash_stability,
-        simulator_options.replica_restart_probability,
-        simulator_options.replica_restart_stability,
+
+        simulator_options.replica_faults,
     });
 
     var simulator = try Simulator.init(allocator, random, simulator_options);
@@ -313,19 +256,28 @@ pub fn main() !void {
     output.info("\n          PASSED ({} ticks)", .{tick_total});
 }
 
+const CrashOptions = struct {
+    /// Probability per tick that a crash will occur.
+    probability: f64,
+    /// Minimum duration of a crash.
+    stability: u32,
+};
+const RestartOptions = struct {
+    /// Probability per tick that a crashed replica will recovery.
+    probability: f64,
+    /// Minimum time a replica is up until it is crashed again.
+    stability: u32,
+};
+const ReplicaFaults = struct {
+    crash: ?CrashOptions,
+    restart: ?RestartOptions,
+};
+
 pub const Simulator = struct {
     pub const Options = struct {
         cluster: Cluster.Options,
         workload: StateMachine.Workload.Options,
-
-        /// Probability per tick that a crash will occur.
-        replica_crash_probability: f64,
-        /// Minimum duration of a crash.
-        replica_crash_stability: u32,
-        /// Probability per tick that a crashed replica will recovery.
-        replica_restart_probability: f64,
-        /// Minimum time a replica is up until it is crashed again.
-        replica_restart_stability: u32,
+        replica_faults: ReplicaFaults,
 
         /// The total number of requests to send. Does not count `register` messages.
         requests_max: usize,
@@ -353,10 +305,14 @@ pub const Simulator = struct {
     requests_idle: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, random: std.rand.Random, options: Options) !Simulator {
-        assert(options.replica_crash_probability < 100.0);
-        assert(options.replica_crash_probability >= 0.0);
-        assert(options.replica_restart_probability < 100.0);
-        assert(options.replica_restart_probability >= 0.0);
+        if(options.replica_faults.crash) |crash_options| {
+            assert(crash_options.probability < 100.0);
+            assert(crash_options.probability >= 0.0);
+        }
+        if(options.replica_faults.restart) |restart_options| {
+            assert(restart_options.probability < 100.0);
+            assert(restart_options.probability >= 0.0);
+        }
         assert(options.requests_max > 0);
         assert(options.request_probability > 0);
         assert(options.request_probability <= 100);
@@ -455,8 +411,8 @@ pub const Simulator = struct {
         }
 
         simulator.cluster.network.transition_to_liveness_mode(simulator.core);
-        simulator.options.replica_crash_probability = 0;
-        simulator.options.replica_restart_probability = 0;
+        simulator.options.replica_faults.crash = null;
+        simulator.options.replica_faults.restart = null;
     }
 
     // If a primary ends up being outside of a core, and is only partially connected to the core,
@@ -816,30 +772,32 @@ pub const Simulator = struct {
             switch (simulator.cluster.replica_health[replica.replica]) {
                 .up => {
                     const replica_writes = replica_storage.writes.count();
-                    const crash_probability = simulator.options.replica_crash_probability *
-                        @as(f64, if (replica_writes == 0) 1.0 else 10.0);
-                    if (!chance_f64(simulator.random, crash_probability)) continue;
+                    if(simulator.options.replica_faults.crash) |crash_options| {
+                        const crash_probability = crash_options.probability * @as(f64, if (replica_writes == 0) 1.0 else 10.0);
+                        if (!chance_f64(simulator.random, crash_probability)) continue;
 
-                    recoverable_count -= @intFromBool(!replica.standby() and
-                        replica.status != .recovering_head and
-                        replica.syncing == .idle);
+                        recoverable_count -= @intFromBool(!replica.standby() and
+                            replica.status != .recovering_head and
+                            replica.syncing == .idle);
 
-                    log.debug("{}: crash replica", .{replica.replica});
-                    simulator.cluster.crash_replica(replica.replica);
+                        log.debug("{}: crash replica", .{replica.replica});
+                        simulator.cluster.crash_replica(replica.replica);
 
-                    simulator.replica_stability[replica.replica] =
-                        simulator.options.replica_crash_stability;
+                        simulator.replica_stability[replica.replica] =
+                            simulator.options.replica_faults.crash.?.stability;
+                    }
                 },
                 .down => {
-                    if (!chance_f64(
-                        simulator.random,
-                        simulator.options.replica_restart_probability,
-                    )) {
-                        continue;
+                    if(simulator.options.replica_faults.crash) |restart_options| {
+                        if (!chance_f64(
+                            simulator.random,
+                            restart_options.probability,
+                        )) {
+                            continue;
+                        }
+                        const fault = recoverable_count >= recoverable_count_min or replica.standby();
+                        simulator.restart_replica(replica.replica, fault);
                     }
-
-                    const fault = recoverable_count >= recoverable_count_min or replica.standby();
-                    simulator.restart_replica(replica.replica, fault);
                 },
             }
         }
@@ -847,6 +805,7 @@ pub const Simulator = struct {
 
     fn restart_replica(simulator: *Simulator, replica_index: u8, fault: bool) void {
         assert(simulator.cluster.replica_health[replica_index] == .down);
+        assert(simulator.options.replica_faults.restart != null);
 
         const replica_storage = &simulator.cluster.storages[replica_index];
 
@@ -887,7 +846,7 @@ pub const Simulator = struct {
 
         replica_storage.faulty = true;
         simulator.replica_stability[replica_index] =
-            simulator.options.replica_restart_stability;
+            simulator.options.replica_faults.restart.?.stability;
     }
 };
 
@@ -1005,4 +964,114 @@ fn log_override(
     // Flush the buffer before returning to ensure, for example, that a log message
     // immediately before a failing assertion is fully printed.
     log_buffer.flush() catch {};
+}
+
+fn get_network_options(random: std.rand.Random, node_count: u8, client_count: u8) NetworkOptions {
+    var network_faults : NetworkFaults = undefined;
+    inline for (std.meta.fields(NetworkFaults)) |field| {
+        if (random.boolean()) {
+            @field(network_faults, field.name) = null;
+        } else {
+            if(std.mem.eql(u8, field.name, "packet_loss")) {
+                network_faults.packet_loss = NetworkFaults.PacketLossOptions{
+                    .probability = random.uintLessThan(u8, 30),
+                };
+            }
+            if(std.mem.eql(u8, field.name, "partition")) {
+                network_faults.partition = NetworkFaults.PartitionOptions{
+                    .partition_mode = random_partition_mode(random),
+                    .partition_symmetry = random_partition_symmetry(random),
+                    .partition_probability = random.uintLessThan(u8, 3),
+                    .unpartition_probability = 1 + random.uintLessThan(u8, 10),
+                    .partition_stability = 100 + random.uintLessThan(u32, 100),
+                    .unpartition_stability = random.uintLessThan(u32, 20),
+                };
+            }
+            if(std.mem.eql(u8, field.name, "path_clog")) {
+                network_faults.path_clog = NetworkFaults.PathClogOptions{
+                    .duration_mean = random.uintLessThan(u16, 500),
+                    .probability = random.uintLessThan(u8, 2),
+                };
+            }
+            if(std.mem.eql(u8, field.name, "packet_replay")) {
+                network_faults.packet_replay = NetworkFaults.PacketReplayOptions{
+                    .probability = random.uintLessThan(u8, 50),
+                };
+            }
+        }
+    }
+    return .{
+        .node_count = node_count,
+        .client_count = client_count,
+        .seed = random.int(u64),
+        .faults = network_faults,
+        .one_way_delay_mean = 3 + random.uintLessThan(u16, 10),
+        .one_way_delay_min = random.uintLessThan(u16, 3),
+        .path_maximum_capacity = 2 + random.uintLessThan(u8, 19),
+    };
+}
+
+fn get_storage_options(random: std.rand.Random) StorageOptions {
+    var storage_faults : StorageFaults = undefined;
+    inline for (std.meta.fields(StorageFaults)) |field| { 
+        if (random.boolean()) {
+            @field(storage_faults, field.name) = null;
+        } else {
+            if(std.mem.eql(u8, field.name, "read")) {
+                @field(storage_faults, field.name) = .{
+                    .probability = random.uintLessThan(u8, 10),
+                };
+            }
+            if(std.mem.eql(u8, field.name, "write")) {
+                @field(storage_faults, field.name) = .{
+                    .probability = random.uintLessThan(u8, 10),
+                };
+            }
+            if(std.mem.eql(u8, field.name, "crash")) {
+                @field(storage_faults, field.name) = .{
+                    .probability = 80 + random.uintLessThan(u8, 21),
+                };
+            }
+        }
+    }
+    return .{
+            .seed = random.int(u64),
+            .read_latency_min = random.uintLessThan(u16, 3),
+            .read_latency_mean = 3 + random.uintLessThan(u16, 10),
+            .write_latency_min = random.uintLessThan(u16, 3),
+            .write_latency_mean = 3 + random.uintLessThan(u16, 100),
+            .faults = storage_faults
+    };
+}
+
+fn get_simulator_options(random: std.rand.Random, cluster_options: Cluster.Options, workload_options: StateMachine.Workload.Options) Simulator.Options {
+    var replica_faults : ReplicaFaults = undefined;
+    inline for (std.meta.fields(ReplicaFaults)) |field| { 
+        if (random.boolean()) {
+            @field(replica_faults, field.name) = null;
+        } else {
+            if(std.mem.eql(u8, field.name, "crash")) {
+                @field(replica_faults, field.name) = .{
+                    // TODO Swarm testing: Test long+few crashes and short+many crashes separately.
+                    .probability = 0.00002,
+                    .stability = random.uintLessThan(u32, 1_000),
+                };
+            }
+            if(std.mem.eql(u8, field.name, "restart")) {
+                @field(replica_faults, field.name) = .{
+                    .probability = 0.0002,
+                    .stability = random.uintLessThan(u32, 1_000),
+                };
+            }
+        }
+    }
+    return .{
+        .cluster = cluster_options,
+        .workload = workload_options,
+        .replica_faults = replica_faults,
+        .requests_max = constants.journal_slot_count * 3,
+        .request_probability = 1 + random.uintLessThan(u8, 99),
+        .request_idle_on_probability = random.uintLessThan(u8, 20),
+        .request_idle_off_probability = 10 + random.uintLessThan(u8, 10),
+    };
 }
