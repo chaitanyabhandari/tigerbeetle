@@ -968,8 +968,9 @@ fn log_override(
 
 fn get_network_options(random: std.rand.Random, node_count: u8, client_count: u8) NetworkOptions {
     var network_faults : NetworkFaults = undefined;
+    const disable_network_faults = random.boolean();
     inline for (std.meta.fields(NetworkFaults)) |field| {
-        if (random.boolean()) {
+        if (disable_network_faults or random.boolean()) {
             @field(network_faults, field.name) = null;
         } else {
             if(std.mem.eql(u8, field.name, "packet_loss")) {
@@ -1013,8 +1014,9 @@ fn get_network_options(random: std.rand.Random, node_count: u8, client_count: u8
 
 fn get_storage_options(random: std.rand.Random) StorageOptions {
     var storage_faults : StorageFaults = undefined;
+    const disable_storage_faults = random.boolean();
     inline for (std.meta.fields(StorageFaults)) |field| { 
-        if (random.boolean()) {
+        if (disable_storage_faults or random.boolean()) {
             @field(storage_faults, field.name) = null;
         } else {
             if(std.mem.eql(u8, field.name, "read")) {
@@ -1046,8 +1048,9 @@ fn get_storage_options(random: std.rand.Random) StorageOptions {
 
 fn get_simulator_options(random: std.rand.Random, cluster_options: Cluster.Options, workload_options: StateMachine.Workload.Options) Simulator.Options {
     var replica_faults : ReplicaFaults = undefined;
+    const disable_replica_faults = random.boolean();
     inline for (std.meta.fields(ReplicaFaults)) |field| { 
-        if (random.boolean()) {
+        if (disable_replica_faults or random.boolean()) {
             @field(replica_faults, field.name) = null;
         } else {
             if(std.mem.eql(u8, field.name, "crash")) {
