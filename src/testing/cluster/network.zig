@@ -140,7 +140,9 @@ pub const Network = struct {
 
         network.packet_simulator.options.faults.packet_loss = null;
         network.packet_simulator.options.faults.packet_replay = null;
-        network.packet_simulator.options.faults.partition = null;
+        if(network.packet_simulator.options.faults.partition != null) {
+            network.packet_simulator.options.faults.partition.?.partition_probability = 0;
+        }
 
         var it_source = core.iterator(.{});
         while (it_source.next()) |replica_source| {
