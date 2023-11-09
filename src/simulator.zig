@@ -96,6 +96,7 @@ pub fn main() !void {
     const standby_count = random.uintAtMost(u8, constants.standbys_max);
     const node_count = replica_count + standby_count;
     const client_count = 1 + random.uintLessThan(u8, constants.clients_max);
+    const enable_all_fault_types = random.boolean();
 
     const cluster_options = Cluster.Options{
         .cluster_id = cluster_id,
@@ -106,8 +107,8 @@ pub fn main() !void {
             constants.storage_size_limit_max - random.uintLessThan(u64, constants.storage_size_limit_max / 10),
         ),
         .seed = random.int(u64),
-        .network = get_network_options(random, node_count, client_count),
-        .storage = get_storage_options(random),
+        .network = get_network_options(random, node_count, client_count, enable_all_fault_types),
+        .storage = get_storage_options(random, enable_all_fault_types),
         .storage_fault_atlas = .{
             .faulty_superblock = true,
             .faulty_wal_headers = replica_count > 1,
@@ -135,7 +136,7 @@ pub fn main() !void {
         .in_flight_max = ReplySequence.stalled_queue_capacity,
     });
 
-    const simulator_options = get_simulator_options(random, cluster_options, workload_options);
+    const simulator_options = get_simulator_options(random, cluster_options, workload_options, enable_all_fault_types);
 
     output.info(
         \\
@@ -411,8 +412,8 @@ pub const Simulator = struct {
         }
 
         simulator.cluster.network.transition_to_liveness_mode(simulator.core);
-        simulator.options.replica_faults.crash = null;
-        simulator.options.replica_faults.restart = null;
+        simulator.options.replica_faults.crash.?.probability = 0;
+        simulator.options.replica_faults.restart.?.probability = 0;
     }
 
     // If a primary ends up being outside of a core, and is only partially connected to the core,
@@ -788,7 +789,7 @@ pub const Simulator = struct {
                     }
                 },
                 .down => {
-                    if(simulator.options.replica_faults.crash) |restart_options| {
+                    if(simulator.options.replica_faults.restart) |restart_options| {
                         if (!chance_f64(
                             simulator.random,
                             restart_options.probability,
@@ -806,6 +807,7 @@ pub const Simulator = struct {
     fn restart_replica(simulator: *Simulator, replica_index: u8, fault: bool) void {
         assert(simulator.cluster.replica_health[replica_index] == .down);
         assert(simulator.options.replica_faults.restart != null);
+
 
         const replica_storage = &simulator.cluster.storages[replica_index];
 
@@ -966,11 +968,11 @@ fn log_override(
     log_buffer.flush() catch {};
 }
 
-fn get_network_options(random: std.rand.Random, node_count: u8, client_count: u8) NetworkOptions {
+fn get_network_options(random: std.rand.Random, node_count: u8, client_count: u8, enable_all_fault_types: bool) NetworkOptions {
     var network_faults : NetworkFaults = undefined;
     const disable_network_faults = random.boolean();
     inline for (std.meta.fields(NetworkFaults)) |field| {
-        if (disable_network_faults or random.boolean()) {
+        if (!enable_all_fault_types and (disable_network_faults or random.boolean())) {
             @field(network_faults, field.name) = null;
         } else {
             if(std.mem.eql(u8, field.name, "packet_loss")) {
@@ -1012,11 +1014,11 @@ fn get_network_options(random: std.rand.Random, node_count: u8, client_count: u8
     };
 }
 
-fn get_storage_options(random: std.rand.Random) StorageOptions {
+fn get_storage_options(random: std.rand.Random, enable_all_fault_types: bool) StorageOptions {
     var storage_faults : StorageFaults = undefined;
     const disable_storage_faults = random.boolean();
     inline for (std.meta.fields(StorageFaults)) |field| { 
-        if (disable_storage_faults or random.boolean()) {
+        if (!enable_all_fault_types and disable_storage_faults or random.boolean()) {
             @field(storage_faults, field.name) = null;
         } else {
             if(std.mem.eql(u8, field.name, "read")) {
@@ -1046,11 +1048,11 @@ fn get_storage_options(random: std.rand.Random) StorageOptions {
     };
 }
 
-fn get_simulator_options(random: std.rand.Random, cluster_options: Cluster.Options, workload_options: StateMachine.Workload.Options) Simulator.Options {
+fn get_simulator_options(random: std.rand.Random, cluster_options: Cluster.Options, workload_options: StateMachine.Workload.Options, enable_all_fault_types: bool) Simulator.Options {
     var replica_faults : ReplicaFaults = undefined;
     const disable_replica_faults = random.boolean();
     inline for (std.meta.fields(ReplicaFaults)) |field| { 
-        if (disable_replica_faults or random.boolean()) {
+        if (!enable_all_fault_types and disable_replica_faults or random.boolean()) {
             @field(replica_faults, field.name) = null;
         } else {
             if(std.mem.eql(u8, field.name, "crash")) {
