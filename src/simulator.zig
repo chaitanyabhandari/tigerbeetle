@@ -810,6 +810,7 @@ pub const Simulator = struct {
 
     fn restart_replica(simulator: *Simulator, replica_index: u8, fault: bool) void {
         assert(simulator.cluster.replica_health[replica_index] == .down);
+        if(simulator.options.replica_faults.restart == null) return;
 
         const replica_storage = &simulator.cluster.storages[replica_index];
 
