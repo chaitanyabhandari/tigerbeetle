@@ -239,7 +239,8 @@ pub const Storage = struct {
         });
         while (storage.writes.peek()) |_| {
             const write = storage.writes.remove();
-            if (storage.options.faults.crash == null or !storage.x_in_100(storage.options.faults.crash.?.probability)) continue;
+            if (storage.options.faults.crash == null or
+               !storage.x_in_100(storage.options.faults.crash.?.probability)) continue;
 
             // Randomly corrupt one of the faulty sectors the operation targeted.
             // TODO: inject more realistic and varied storage faults as described above.
@@ -457,7 +458,8 @@ pub const Storage = struct {
             storage.memory_written.set(sector);
         }
 
-        if (storage.options.faults.write != null and storage.x_in_100(storage.options.faults.write.?.probability)) {
+        if (storage.options.faults.write != null and
+            storage.x_in_100(storage.options.faults.write.?.probability)) {
             storage.fault_faulty_sectors(write.zone, write.offset, write.buffer.len);
         }
 

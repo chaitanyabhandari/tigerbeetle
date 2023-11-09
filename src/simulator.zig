@@ -412,8 +412,12 @@ pub const Simulator = struct {
         }
 
         simulator.cluster.network.transition_to_liveness_mode(simulator.core);
-        simulator.options.replica_faults.crash.?.probability = 0;
-        simulator.options.replica_faults.restart.?.probability = 0;
+        if(simulator.options.replica_faults.crash != null) {
+            simulator.options.replica_faults.crash.?.probability = 0;
+        }
+        if(simulator.options.replica_faults.restart != null) {
+            simulator.options.replica_faults.restart.?.probability = 0;
+        }
     }
 
     // If a primary ends up being outside of a core, and is only partially connected to the core,
@@ -806,8 +810,6 @@ pub const Simulator = struct {
 
     fn restart_replica(simulator: *Simulator, replica_index: u8, fault: bool) void {
         assert(simulator.cluster.replica_health[replica_index] == .down);
-        assert(simulator.options.replica_faults.restart != null);
-
 
         const replica_storage = &simulator.cluster.storages[replica_index];
 
