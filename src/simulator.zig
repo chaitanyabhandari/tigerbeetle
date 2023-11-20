@@ -157,7 +157,7 @@ pub fn main() !void {
         \\          read_latency_mean={}
         \\          write_latency_min={}
         \\          write_latency_mean={}
-        \\          replica faults={}
+        \\          replica faults={any}
     , .{
         seed,
         cluster_options.replica_count,
@@ -270,15 +270,15 @@ const RestartOptions = struct {
     stability: u32,
 };
 const ReplicaFaults = struct {
-    crash: ?CrashOptions,
-    restart: ?RestartOptions,
+    crash: CrashOptions,
+    restart: RestartOptions,
 };
 
 pub const Simulator = struct {
     pub const Options = struct {
         cluster: Cluster.Options,
         workload: StateMachine.Workload.Options,
-        replica_faults: ReplicaFaults,
+        replica_faults: ?ReplicaFaults,
 
         /// The total number of requests to send. Does not count `register` messages.
         requests_max: usize,
@@ -306,13 +306,11 @@ pub const Simulator = struct {
     requests_idle: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, random: std.rand.Random, options: Options) !Simulator {
-        if(options.replica_faults.crash) |crash_options| {
-            assert(crash_options.probability < 100.0);
-            assert(crash_options.probability >= 0.0);
-        }
-        if(options.replica_faults.restart) |restart_options| {
-            assert(restart_options.probability < 100.0);
-            assert(restart_options.probability >= 0.0);
+        if(options.replica_faults) |replica_faults| {
+            assert(replica_faults.crash.probability < 100.0);
+            assert(replica_faults.crash.probability >= 0.0);
+            assert(replica_faults.restart.probability < 100.0);
+            assert(replica_faults.restart.probability >= 0.0);
         }
         assert(options.requests_max > 0);
         assert(options.request_probability > 0);
@@ -412,12 +410,7 @@ pub const Simulator = struct {
         }
 
         simulator.cluster.network.transition_to_liveness_mode(simulator.core);
-        if(simulator.options.replica_faults.crash != null) {
-            simulator.options.replica_faults.crash.?.probability = 0;
-        }
-        if(simulator.options.replica_faults.restart != null) {
-            simulator.options.replica_faults.restart.?.probability = 0;
-        }
+        simulator.options.replica_faults = null;
     }
 
     // If a primary ends up being outside of a core, and is only partially connected to the core,
@@ -777,8 +770,8 @@ pub const Simulator = struct {
             switch (simulator.cluster.replica_health[replica.replica]) {
                 .up => {
                     const replica_writes = replica_storage.writes.count();
-                    if(simulator.options.replica_faults.crash) |crash_options| {
-                        const crash_probability = crash_options.probability * @as(f64, if (replica_writes == 0) 1.0 else 10.0);
+                    if(simulator.options.replica_faults) |replica_faults| {
+                        const crash_probability = replica_faults.crash.probability * @as(f64, if (replica_writes == 0) 1.0 else 10.0);
                         if (!chance_f64(simulator.random, crash_probability)) continue;
 
                         recoverable_count -= @intFromBool(!replica.standby() and
@@ -789,14 +782,14 @@ pub const Simulator = struct {
                         simulator.cluster.crash_replica(replica.replica);
 
                         simulator.replica_stability[replica.replica] =
-                            simulator.options.replica_faults.crash.?.stability;
+                            replica_faults.crash.stability;
                     }
                 },
                 .down => {
-                    if(simulator.options.replica_faults.restart) |restart_options| {
+                    if(simulator.options.replica_faults) |replica_faults| {
                         if (!chance_f64(
                             simulator.random,
-                            restart_options.probability,
+                            replica_faults.restart.probability,
                         )) {
                             continue;
                         }
@@ -810,7 +803,7 @@ pub const Simulator = struct {
 
     fn restart_replica(simulator: *Simulator, replica_index: u8, fault: bool) void {
         assert(simulator.cluster.replica_health[replica_index] == .down);
-        if(simulator.options.replica_faults.restart == null) return;
+        assert(simulator.options.replica_faults != null);
 
         const replica_storage = &simulator.cluster.storages[replica_index];
 
@@ -851,7 +844,7 @@ pub const Simulator = struct {
 
         replica_storage.faulty = true;
         simulator.replica_stability[replica_index] =
-            simulator.options.replica_faults.restart.?.stability;
+            simulator.options.replica_faults.?.restart.stability;
     }
 };
 
@@ -1052,26 +1045,22 @@ fn get_storage_options(random: std.rand.Random, enable_all_fault_types: bool) St
 }
 
 fn get_simulator_options(random: std.rand.Random, cluster_options: Cluster.Options, workload_options: StateMachine.Workload.Options, enable_all_fault_types: bool) Simulator.Options {
-    var replica_faults : ReplicaFaults = undefined;
+    var replica_faults : ?ReplicaFaults = undefined;
     const disable_replica_faults = random.boolean();
-    inline for (std.meta.fields(ReplicaFaults)) |field| { 
-        if (!enable_all_fault_types and disable_replica_faults or random.boolean()) {
-            @field(replica_faults, field.name) = null;
-        } else {
-            if(std.mem.eql(u8, field.name, "crash")) {
-                @field(replica_faults, field.name) = .{
-                    // TODO Swarm testing: Test long+few crashes and short+many crashes separately.
-                    .probability = 0.00002,
-                    .stability = random.uintLessThan(u32, 1_000),
-                };
-            }
-            if(std.mem.eql(u8, field.name, "restart")) {
-                @field(replica_faults, field.name) = .{
-                    .probability = 0.0002,
-                    .stability = random.uintLessThan(u32, 1_000),
-                };
-            }
-        }
+    if (!enable_all_fault_types and disable_replica_faults or random.boolean()) {
+        replica_faults = null;
+    } else {
+        replica_faults = .{
+            .crash = .{
+                // TODO Swarm testing: Test long+few crashes and short+many crashes separately.
+                .probability = 0.00002,
+                .stability = random.uintLessThan(u32, 1_000),
+            },
+            .restart = .{
+                .probability = 0.0002,
+                .stability = random.uintLessThan(u32, 1_000),
+            },
+        };
     }
     return .{
         .cluster = cluster_options,
