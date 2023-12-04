@@ -96,7 +96,7 @@ pub fn main() !void {
     const standby_count = random.uintAtMost(u8, constants.standbys_max);
     const node_count = replica_count + standby_count;
     const client_count = 1 + random.uintLessThan(u8, constants.clients_max);
-    const enable_all_fault_types = random.boolean();
+    const swarm_testing_enabled = random.boolean();
 
     const cluster_options = Cluster.Options{
         .cluster_id = cluster_id,
@@ -107,8 +107,8 @@ pub fn main() !void {
             constants.storage_size_limit_max - random.uintLessThan(u64, constants.storage_size_limit_max / 10),
         ),
         .seed = random.int(u64),
-        .network = get_network_options(random, node_count, client_count, enable_all_fault_types),
-        .storage = get_storage_options(random, enable_all_fault_types),
+        .network = get_network_options(random, node_count, client_count, swarm_testing_enabled),
+        .storage = get_storage_options(random, swarm_testing_enabled),
         .storage_fault_atlas = .{
             .faulty_superblock = true,
             .faulty_wal_headers = replica_count > 1,
@@ -136,11 +136,12 @@ pub fn main() !void {
         .in_flight_max = ReplySequence.stalled_queue_capacity,
     });
 
-    const simulator_options = get_simulator_options(random, cluster_options, workload_options, enable_all_fault_types);
+    const simulator_options = get_simulator_options(random, cluster_options, workload_options, swarm_testing_enabled);
 
     output.info(
         \\
         \\          SEED={}
+        \\          SWARM_TESTING={}
         \\
         \\          replicas={}
         \\          standbys={}
@@ -160,6 +161,7 @@ pub fn main() !void {
         \\          replica faults={any}
     , .{
         seed,
+        swarm_testing_enabled,
         cluster_options.replica_count,
         cluster_options.standby_count,
         cluster_options.client_count,
